@@ -85,17 +85,6 @@ Projeyi yerel bilgisayarınızda çalıştırmak için aşağıdaki adımları i
 
 
 
-
-## 🤝 Katkıda Bulunma
-
-Katkılarınızı bekliyoruz! Herhangi bir öneriniz veya hata bildiriminiz varsa lütfen bir **Issue** açın veya **Pull Request** gönderin.
-
-1.  Projeyi Forklayın.
-2.  Yeni bir Branch oluşturun (`git checkout -b ozellik/YeniOzellik`).
-3.  Değişikliklerinizi Commit yapın (`git commit -m 'Yeni özellik eklendi'`).
-4.  Branch'i Pushlayın (`git push origin ozellik/YeniOzellik`).
-5.  Bir Pull Request oluşturun.
-
 ## 📝 Lisans
 
 Bu proje [MIT](LICENSE) lisansı ile lisanslanmıştır.
