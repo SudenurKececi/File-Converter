@@ -1,9 +1,14 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter import ttk
 from PIL import Image
 import fitz  # PyMuPDF
 from pydub import AudioSegment
 import os
+
+import win32com.client as win32
+from docx import Document
+from pptx import Presentation
 
 # --- GLOBAL VERILER ---
 
@@ -36,10 +41,12 @@ def update_file_count():
 
 def add_files():
     filetypes = [
-        ("Tüm desteklenen", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.pdf;*.mp3;*.wav;*.ogg;*.flac"),
+        ("Tüm desteklenen", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.pdf;*.mp3;*.wav;*.ogg;*.flac;*.doc;*.docx;*.ppt;*.pptx"),
         ("Resimler", "*.png;*.jpg;*.jpeg;*.webp;*.bmp"),
         ("PDF", "*.pdf"),
         ("Ses", "*.mp3;*.wav;*.ogg;*.flac"),
+        ("Word", "*.doc;*.docx"),
+        ("PowerPoint", "*.ppt;*.pptx"),
         ("Tüm dosyalar", "*.*"),
     ]
     files = filedialog.askopenfilenames(title="Dosya seç", filetypes=filetypes)
@@ -106,7 +113,7 @@ def get_resize_values():
     return width, height
 
 
-# --- DÖNÜŞTÜRME FONKSIYONLARI ---
+# --- DÖNÜŞTÜRME FONKSIYONLARI (RESIM / PDF / SES) ---
 
 def convert_image_format(input_path, out_dir, target_format, width=None, height=None, quality=None):
     """Resim format dönüştürme + opsiyonel resize + kalite (jpeg sıkıştırma)."""
@@ -188,6 +195,96 @@ def convert_audio(input_path, out_dir, target_format):
     return out_path
 
 
+# --- DÖNÜŞTÜRME FONKSIYONLARI (OFFICE) ---
+
+def convert_word_to_pdf(input_path, out_dir):
+    """Word (doc/docx) -> PDF (MS Word + pywin32 gerekir)."""
+    input_path = os.path.abspath(input_path)
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    out_path = safe_output_path(out_dir, base_name, "pdf")
+    out_path = os.path.abspath(out_path)
+
+    word = win32.Dispatch("Word.Application")
+    word.Visible = False
+    doc = None
+    try:
+        doc = word.Documents.Open(input_path)
+        # 17 = wdFormatPDF
+        doc.SaveAs(out_path, FileFormat=17)
+    finally:
+        if doc is not None:
+            doc.Close(False)
+        word.Quit()
+    return out_path
+
+
+def convert_pdf_to_word(pdf_path, out_dir):
+    """PDF -> Word (docx) (MS Word + pywin32 gerekir, Word 2013+)."""
+    pdf_path = os.path.abspath(pdf_path)
+    base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+    out_path = safe_output_path(out_dir, base_name, "docx")
+    out_path = os.path.abspath(out_path)
+
+    word = win32.Dispatch("Word.Application")
+    word.Visible = False
+    doc = None
+    try:
+        doc = word.Documents.Open(pdf_path)
+        # 16 = wdFormatDocumentDefault (docx)
+        doc.SaveAs(out_path, FileFormat=16)
+    finally:
+        if doc is not None:
+            doc.Close(False)
+        word.Quit()
+    return out_path
+
+
+def convert_ppt_to_pdf(input_path, out_dir):
+    """PPT/PPTX -> PDF (MS PowerPoint + pywin32 gerekir)."""
+    input_path = os.path.abspath(input_path)
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    out_path = safe_output_path(out_dir, base_name, "pdf")
+    out_path = os.path.abspath(out_path)
+
+    ppt = win32.Dispatch("PowerPoint.Application")
+    ppt.Visible = False
+    presentation = None
+    try:
+        presentation = ppt.Presentations.Open(input_path, WithWindow=False)
+        # 32 = ppSaveAsPDF
+        presentation.SaveAs(out_path, 32)
+    finally:
+        if presentation is not None:
+            presentation.Close()
+        ppt.Quit()
+    return out_path
+
+
+def convert_pptx_to_word(input_path, out_dir):
+    """PPTX -> Word (docx), slayt metinlerini bir Word belgesine yazar."""
+    input_path = os.path.abspath(input_path)
+    prs = Presentation(input_path)
+    doc = Document()
+
+    for i, slide in enumerate(prs.slides, start=1):
+        doc.add_heading(f"Slide {i}", level=1)
+        for shape in slide.shapes:
+            text = ""
+            if hasattr(shape, "text"):
+                text = shape.text
+            if text:
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line:
+                        doc.add_paragraph(line)
+
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    out_path = safe_output_path(out_dir, base_name, "docx")
+    out_path = os.path.abspath(out_path)
+    doc.save(out_path)
+    return out_path
+
+
 # --- FORMAT MENÜSÜNÜ GÜNCELLEME ---
 
 def update_format_options():
@@ -201,6 +298,14 @@ def update_format_options():
         formats = ["pdf"]
     elif op == "Ses format dönüştür":
         formats = ["mp3", "wav", "ogg", "flac"]
+    elif op == "Word -> PDF":
+        formats = ["pdf"]
+    elif op == "PDF -> Word":
+        formats = ["docx"]
+    elif op == "PPT/PPTX -> PDF":
+        formats = ["pdf"]
+    elif op == "PPTX -> Word":
+        formats = ["docx"]
     else:
         formats = ["txt"]
 
@@ -211,7 +316,7 @@ def update_format_options():
     format_var.set(formats[0])
 
 
-# --- ANA DÖNÜŞTÜRME BUTONUNUN ISLEVI ---
+# --- ANA DÖNÜŞTÜRME BUTONUNUN ISLEVI (PROGRESS BAR'LI) ---
 
 def start_conversion():
     if not selected_files:
@@ -228,6 +333,31 @@ def start_conversion():
     width, height = get_resize_values()
     quality = quality_scale.get()
 
+    # --- Progress bar ayarı ---
+    if op in [
+        "Resim format dönüştür",
+        "PDF -> Resim",
+        "Ses format dönüştür",
+        "Word -> PDF",
+        "PDF -> Word",
+        "PPT/PPTX -> PDF",
+        "PPTX -> Word",
+    ]:
+        total_tasks = len(selected_files)
+    elif op == "Resim(ler) -> PDF":
+        total_tasks = 1
+    else:
+        total_tasks = 1
+
+    if total_tasks <= 0:
+        total_tasks = 1
+
+    progress_bar["maximum"] = total_tasks
+    progress_var.set(0)
+    label_progress.config(text="Dönüştürülüyor...")
+    root.update_idletasks()
+    completed = 0
+
     success = 0
     errors = 0
 
@@ -240,11 +370,18 @@ def start_conversion():
                 except Exception as e:
                     print("Resim dönüştürürken hata:", path, e)
                     errors += 1
+                finally:
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
 
         elif op == "PDF -> Resim":
             for path in selected_files:
                 if not path.lower().endswith(".pdf"):
                     print("PDF değil, atlandı:", path)
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
                     continue
                 try:
                     convert_pdf_to_images(path, output_dir, target_format)
@@ -252,6 +389,10 @@ def start_conversion():
                 except Exception as e:
                     print("PDF -> Resim hatası:", path, e)
                     errors += 1
+                finally:
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
 
         elif op == "Resim(ler) -> PDF":
             try:
@@ -260,6 +401,10 @@ def start_conversion():
             except Exception as e:
                 print("Resim(ler) -> PDF hatası:", e)
                 errors = 1
+            finally:
+                completed = total_tasks
+                progress_var.set(completed)
+                root.update_idletasks()
 
         elif op == "Ses format dönüştür":
             for path in selected_files:
@@ -269,20 +414,103 @@ def start_conversion():
                 except Exception as e:
                     print("Ses dönüştürme hatası:", path, e)
                     errors += 1
+                finally:
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+
+        elif op == "Word -> PDF":
+            for path in selected_files:
+                if not path.lower().endswith((".doc", ".docx")):
+                    print("Word dosyası değil, atlandı:", path)
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+                    continue
+                try:
+                    convert_word_to_pdf(path, output_dir)
+                    success += 1
+                except Exception as e:
+                    print("Word -> PDF hatası:", path, e)
+                    errors += 1
+                finally:
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+
+        elif op == "PDF -> Word":
+            for path in selected_files:
+                if not path.lower().endswith(".pdf"):
+                    print("PDF değil, atlandı:", path)
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+                    continue
+                try:
+                    convert_pdf_to_word(path, output_dir)
+                    success += 1
+                except Exception as e:
+                    print("PDF -> Word hatası:", path, e)
+                    errors += 1
+                finally:
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+
+        elif op == "PPT/PPTX -> PDF":
+            for path in selected_files:
+                if not path.lower().endswith((".ppt", ".pptx")):
+                    print("PPT/PPTX değil, atlandı:", path)
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+                    continue
+                try:
+                    convert_ppt_to_pdf(path, output_dir)
+                    success += 1
+                except Exception as e:
+                    print("PPT/PPTX -> PDF hatası:", path, e)
+                    errors += 1
+                finally:
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+
+        elif op == "PPTX -> Word":
+            for path in selected_files:
+                if not path.lower().endswith(".pptx"):
+                    print("PPTX değil, atlandı:", path)
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
+                    continue
+                try:
+                    convert_pptx_to_word(path, output_dir)
+                    success += 1
+                except Exception as e:
+                    print("PPTX -> Word hatası:", path, e)
+                    errors += 1
+                finally:
+                    completed += 1
+                    progress_var.set(completed)
+                    root.update_idletasks()
 
         else:
             messagebox.showerror("Hata", "Geçersiz işlem türü.")
             return
 
     finally:
+        label_progress.config(text="Hazır.")
+        progress_var.set(0)
+        root.update_idletasks()
         messagebox.showinfo("Tamamlandı", f"Başarılı: {success}\nHatalı: {errors}")
 
 
 # --- ARAYÜZ ---
 
 root = tk.Tk()
-root.title("Gelişmiş Dosya Converter (Video Yok)")
-root.geometry("750x550")
+root.title("Süper Dönüştürücü")
+root.geometry("780x620")
 
 # İşlem türü
 tk.Label(root, text="İşlem türü:").pack(pady=(10, 0))
@@ -295,6 +523,10 @@ operation_menu = tk.OptionMenu(
     "PDF -> Resim",
     "Resim(ler) -> PDF",
     "Ses format dönüştür",
+    "Word -> PDF",
+    "PDF -> Word",
+    "PPT/PPTX -> PDF",
+    "PPTX -> Word",
 )
 operation_menu.pack()
 
@@ -335,7 +567,7 @@ btn_remove_file.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 btn_clear_files = tk.Button(frame_files, text="Listeyi Temizle", command=clear_file_list)
 btn_clear_files.grid(row=0, column=2, padx=5, pady=5, sticky="w")
 
-listbox_files = tk.Listbox(frame_files, width=90, height=12)
+listbox_files = tk.Listbox(frame_files, width=100, height=12)
 listbox_files.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
 
 frame_files.rowconfigure(1, weight=1)
@@ -346,13 +578,24 @@ label_file_count.grid(row=2, column=0, columnspan=3, sticky="w", padx=5)
 
 # Çıktı klasörü
 frame_output = tk.Frame(root)
-frame_output.pack(pady=10, fill=tk.X)
+frame_output.pack(pady=5, fill=tk.X)
 
 btn_output_dir = tk.Button(frame_output, text="Çıktı klasörünü seç", command=select_output_dir)
 btn_output_dir.pack(side=tk.LEFT, padx=5)
 
 label_output = tk.Label(frame_output, text="Çıktı klasörü seçilmedi.")
 label_output.pack(side=tk.LEFT, padx=5)
+
+# Progress bar
+frame_progress = tk.Frame(root)
+frame_progress.pack(pady=5, fill=tk.X)
+
+progress_var = tk.DoubleVar()
+progress_bar = ttk.Progressbar(frame_progress, variable=progress_var, maximum=100)
+progress_bar.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+label_progress = tk.Label(frame_progress, text="Hazır.")
+label_progress.pack(side=tk.LEFT, padx=5)
 
 # Dönüştür butonu
 btn_convert = tk.Button(root, text="Dönüştür", command=start_conversion)
